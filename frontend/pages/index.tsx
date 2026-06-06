@@ -33,7 +33,7 @@ export default function Home() {
   const [showTragediesOnly, setShowTragediesOnly] = useState(false);
   const [activeTab, setActiveTab] = useState<'short' | 'detailed'>('short');
 
-  const backendUrl = 'https://shakespeare-gpt-v2-production.up.railway.app';
+  const backendUrl = 'https://shakespeare-gpt-v2-production-3c45.up.railway.app';
 
   // Shakespeare plays data
   const plays: Play[] = [
