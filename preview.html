@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shakespeare GPT - Academic Dictionary Style</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: linear-gradient(135deg, #F5F1E8 0%, #E8E0D0 100%);
+            margin: 0;
+            padding: 0;
+            color: #2D3748;
+            min-height: 100vh;
+        }
+        .play-item {
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 8px;
+            margin: 2px 8px;
+            padding: 12px 16px;
+        }
+        .play-item:hover {
+            background-color: #E6FFFA;
+            transform: translateX(4px);
+            box-shadow: 0 2px 8px rgba(45, 90, 39, 0.1);
+        }
+        .play-item.active {
+            background: linear-gradient(135deg, #6B46C1 0%, #553C9A 100%);
+            color: white;
+            box-shadow: 0 4px 12px rgba(107, 70, 193, 0.3);
+        }
+        .play-item.active .play-category {
+            color: rgba(255, 255, 255, 0.7) !important;
+        }
+        .play-category {
+            font-size: 12px;
+            color: #2D5A27;
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+        .title-gradient {
+            background: linear-gradient(135deg, #6B46C1 0%, #553C9A 50%, #2D5A27 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #48BB78 0%, #38A169 100%);
+            box-shadow: 0 0 0 3px rgba(72, 187, 120, 0.2);
+            animation: pulse 2s infinite;
+            flex-shrink: 0;
+        }
+        @keyframes pulse {
+            0%   { box-shadow: 0 0 0 0 rgba(72, 187, 120, 0.4); }
+            70%  { box-shadow: 0 0 0 6px rgba(72, 187, 120, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(72, 187, 120, 0); }
+        }
+        /* Answer markdown styles */
+        #detailedAnswer {
+            color: #374151;
+            line-height: 1.8;
+            font-size: 16px;
+            font-family: 'Courier New', monospace;
+        }
+        #detailedAnswer h1 { font-size: 1.5rem; font-weight: 600; color: #6B46C1; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+        #detailedAnswer h2 { font-size: 1.3rem; font-weight: 600; color: #6B46C1; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+        #detailedAnswer h3 { font-size: 1.1rem; font-weight: 600; color: #6B46C1; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+        #detailedAnswer strong { font-weight: 600; color: #6B46C1; }
+        #detailedAnswer em { font-style: italic; color: #2D5A27; }
+        #detailedAnswer p { margin-bottom: 1rem; line-height: 1.6; }
+        #detailedAnswer blockquote {
+            margin-left: 2rem;
+            margin-bottom: 1rem;
+            font-style: italic;
+            border-left: 4px solid #6B46C1;
+            background: linear-gradient(135deg, #F0FFF4 0%, #E6FFFA 100%);
+            padding: 1.5rem;
+            border-radius: 12px;
+            font-size: 15px;
+            box-shadow: 0 4px 12px rgba(45, 90, 39, 0.1);
+        }
+        #detailedAnswer blockquote p { margin-bottom: 0; }
+    </style>
+</head>
+<body>
+
+<div style="display: flex; height: 100vh;">
+
+    <!-- Sidebar -->
+    <div style="width: 320px; background: linear-gradient(180deg, #FEFCF8 0%, #F7F3E8 100%); border-right: 1px solid #E2E8F0; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); overflow-y: auto; flex-shrink: 0;">
+
+        <!-- Filter Toggle -->
+        <div style="padding: 16px; border-bottom: 1px solid #718096;">
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" id="filterToggle" style="border-radius: 4px;">
+                <span style="font-size: 14px; color: #6B46C1; font-weight: 500;">Show Tragedies Only</span>
+            </label>
+        </div>
+
+        <!-- Selected Play Panel -->
+        <div id="selectedPlayPanel" style="display: none; padding: 16px; border-bottom: 1px solid #718096; background-color: #f7fafc;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div style="font-size: 14px; font-weight: 600; color: #6B46C1;">Selected Play:</div>
+                    <div id="selectedPlayName" style="font-size: 12px; color: #1A202C;"></div>
+                </div>
+                <button onclick="deselectPlay()" style="padding: 6px 12px; font-size: 12px; background: linear-gradient(135deg, #6B46C1 0%, #553C9A 100%); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; box-shadow: 0 2px 8px rgba(107,70,193,0.3); transition: all 0.3s cubic-bezier(0.4,0,0.2,1);"
+                    onmouseenter="this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 12px rgba(107,70,193,0.4)';"
+                    onmouseleave="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 8px rgba(107,70,193,0.3)';">
+                    Deselect
+                </button>
+            </div>
+        </div>
+
+        <!-- Plays List -->
+        <div style="padding: 16px;">
+            <h3 style="font-size: 16px; font-weight: 600; color: #6B46C1; margin: 0 0 16px 0; text-transform: uppercase; letter-spacing: 0.5px;">Plays</h3>
+            <div id="playsList" style="display: flex; flex-direction: column; gap: 4px;"></div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+
+        <!-- Header -->
+        <div style="padding: 24px; border-bottom: 1px solid #e2e8f0; background-color: #FEFCF8; flex-shrink: 0;">
+            <div style="max-width: 1024px; margin: 0 auto;">
+                <h1 class="title-gradient" style="font-size: 36px; font-weight: 800; margin: 0; font-family: 'Inter', sans-serif; letter-spacing: 0.5px;">Shakespeare GPT</h1>
+                <p style="color: #2D5A27; margin: 8px 0 0 0; font-family: 'Inter', sans-serif; font-size: 18px; font-weight: 500;">Ask questions about Shakespeare's works</p>
+            </div>
+        </div>
+
+        <!-- Scrollable Area -->
+        <div style="flex: 1; padding: 24px; overflow-y: auto;">
+            <div style="max-width: 1024px; margin: 0 auto;">
+
+                <!-- Info Bar -->
+                <div style="background-color: #FEFCF8; border-radius: 16px; padding: 20px; margin-bottom: 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid #E2E8F0;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div class="status-indicator"></div>
+                            <span id="statusText" style="font-size: 16px; color: #1A202C; font-weight: 500;">Searching across all Shakespeare plays</span>
+                        </div>
+                        <button id="clearFilterBtn" onclick="deselectPlay()" style="display: none; padding: 8px 16px; font-size: 14px; background-color: transparent; color: #6B46C1; border: 2px solid #6B46C1; border-radius: 12px; cursor: pointer; font-weight: 600; transition: all 0.3s cubic-bezier(0.4,0,0.2,1);"
+                            onmouseenter="this.style.backgroundColor='#6B46C1'; this.style.color='white'; this.style.transform='translateY(-1px)';"
+                            onmouseleave="this.style.backgroundColor='transparent'; this.style.color='#6B46C1'; this.style.transform='translateY(0)';">
+                            Clear Filter
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Search Input -->
+                <div style="margin-bottom: 32px;">
+                    <div style="max-width: 512px; margin: 0 auto;">
+                        <div style="display: flex; gap: 12px;">
+                            <input
+                                type="text"
+                                id="searchInput"
+                                placeholder="Ask about Shakespeare's plays, characters, or themes..."
+                                style="flex: 1; padding: 16px 20px; border: 2px solid #E2E8F0; border-radius: 12px; font-size: 16px; background-color: #FEFCF8; outline: none; transition: all 0.3s ease; font-family: 'Inter', sans-serif;"
+                                onfocus="this.style.borderColor='#6B46C1'; this.style.boxShadow='0 0 0 3px rgba(107,70,193,0.1)'; this.style.transform='translateY(-1px)';"
+                                onblur="this.style.borderColor='#E2E8F0'; this.style.boxShadow='none'; this.style.transform='translateY(0)';"
+                            >
+                            <button id="sendBtn" onclick="askQuestion()" style="padding: 16px 28px; color: white; font-weight: 600; border-radius: 12px; background: linear-gradient(135deg, #6B46C1 0%, #553C9A 100%); border: none; cursor: pointer; transition: all 0.3s cubic-bezier(0.4,0,0.2,1); box-shadow: 0 4px 12px rgba(107,70,193,0.3); font-family: 'Inter', sans-serif; font-size: 16px; white-space: nowrap;"
+                                onmouseenter="if(!this.disabled){ this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(107,70,193,0.4)'; }"
+                                onmouseleave="if(!this.disabled){ this.style.transform='translateY(0)'; this.style.boxShadow='0 4px 12px rgba(107,70,193,0.3)'; }">
+                                Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Error -->
+                <div id="errorState" style="display: none; max-width: 512px; margin: 0 auto 24px auto;">
+                    <div style="background-color: #fef2f2; border: 1px solid #fecaca; color: #dc2626; padding: 12px 16px; border-radius: 8px;">
+                        ❌ <span id="errorText"></span>
+                    </div>
+                </div>
+
+                <!-- Answer Section -->
+                <div id="answerSection" style="display: none; max-width: 1024px; margin: 0 auto;">
+                    <div style="background-color: white; border-radius: 8px; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1); border: 1px solid #e5e7eb;">
+                        <!-- Question Display -->
+                        <div style="padding: 24px; border-bottom: 1px solid #e5e7eb;">
+                            <h3 style="font-size: 18px; font-weight: 600; color: #6B46C1; margin: 0 0 8px 0;">Question</h3>
+                            <p id="questionDisplay" style="color: #374151; margin: 0;"></p>
+                        </div>
+                        <!-- Answer Content -->
+                        <div style="padding: 24px;">
+                            <div id="detailedAnswer"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sources -->
+                <div id="sourcesSection" style="display: none; max-width: 1024px; margin: 24px auto 0 auto;">
+                    <div style="background-color: #FEFCF8; border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid #E2E8F0; padding: 24px;">
+                        <h3 style="font-size: 18px; font-weight: 600; color: #6B46C1; margin: 0 0 16px 0;">📚 Sources</h3>
+                        <div id="sourcesList" style="display: flex; flex-direction: column; gap: 12px;"></div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const BACKEND_URL = 'http://localhost:8000';
+
+    const plays = [
+        { title: "All's Well That Ends Well", category: "Comedy" },
+        { title: "Antony and Cleopatra", category: "Tragedy" },
+        { title: "As You Like It", category: "Comedy" },
+        { title: "The Comedy of Errors", category: "Comedy" },
+        { title: "Coriolanus", category: "Tragedy" },
+        { title: "Cymbeline", category: "Tragedy" },
+        { title: "Hamlet", category: "Tragedy" },
+        { title: "Henry IV, Part 1", category: "History" },
+        { title: "Henry IV, Part 2", category: "History" },
+        { title: "Henry V", category: "History" },
+        { title: "Henry VI, Part 1", category: "History" },
+        { title: "Henry VI, Part 2", category: "History" },
+        { title: "Henry VI, Part 3", category: "History" },
+        { title: "Henry VIII", category: "History" },
+        { title: "Julius Caesar", category: "Tragedy" },
+        { title: "King John", category: "History" },
+        { title: "King Lear", category: "Tragedy" },
+        { title: "Love's Labour's Lost", category: "Comedy" },
+        { title: "Macbeth", category: "Tragedy" },
+        { title: "Measure for Measure", category: "Comedy" },
+        { title: "The Merchant of Venice", category: "Comedy" },
+        { title: "The Merry Wives of Windsor", category: "Comedy" },
+        { title: "A Midsummer Night's Dream", category: "Comedy" },
+        { title: "Much Ado About Nothing", category: "Comedy" },
+        { title: "Othello", category: "Tragedy" },
+        { title: "Pericles, Prince of Tyre", category: "Tragedy" },
+        { title: "Richard II", category: "History" },
+        { title: "Richard III", category: "History" },
+        { title: "Romeo and Juliet", category: "Tragedy" },
+        { title: "The Taming of the Shrew", category: "Comedy" },
+        { title: "The Tempest", category: "Comedy" },
+        { title: "Timon of Athens", category: "Tragedy" },
+        { title: "Titus Andronicus", category: "Tragedy" },
+        { title: "Troilus and Cressida", category: "Tragedy" },
+        { title: "Twelfth Night", category: "Comedy" },
+        { title: "The Two Gentlemen of Verona", category: "Comedy" },
+        { title: "The Two Noble Kinsmen", category: "Tragedy" },
+        { title: "The Winter's Tale", category: "Comedy" }
+    ];
+
+    let selectedPlay = null;
+
+    function populatePlays(filterCategory = null) {
+        const list = document.getElementById('playsList');
+        list.innerHTML = '';
+        const filtered = filterCategory ? plays.filter(p => p.category === filterCategory) : plays;
+        filtered.forEach(play => {
+            const div = document.createElement('div');
+            div.className = 'play-item' + (selectedPlay && selectedPlay.title === play.title ? ' active' : '');
+            div.innerHTML = `<div style="font-weight: 500;">${play.title}</div><div class="play-category">${play.category}</div>`;
+            div.onclick = () => selectPlay(play);
+            list.appendChild(div);
+        });
+    }
+
+    function selectPlay(play) {
+        selectedPlay = play;
+        populatePlays(document.getElementById('filterToggle').checked ? 'Tragedy' : null);
+
+        document.getElementById('statusText').textContent = `Searching within: ${play.title} (${play.category})`;
+        document.getElementById('clearFilterBtn').style.display = 'block';
+        document.getElementById('selectedPlayName').textContent = play.title;
+        document.getElementById('selectedPlayPanel').style.display = 'block';
+        document.getElementById('searchInput').placeholder = `Ask about ${play.title}...`;
+    }
+
+    function deselectPlay() {
+        selectedPlay = null;
+        populatePlays(document.getElementById('filterToggle').checked ? 'Tragedy' : null);
+
+        document.getElementById('statusText').textContent = 'Searching across all Shakespeare plays';
+        document.getElementById('clearFilterBtn').style.display = 'none';
+        document.getElementById('selectedPlayPanel').style.display = 'none';
+        document.getElementById('searchInput').placeholder = "Ask about Shakespeare's plays, characters, or themes...";
+    }
+
+    async function askQuestion() {
+        const question = document.getElementById('searchInput').value;
+        if (!question.trim()) return;
+
+        const btn = document.getElementById('sendBtn');
+        btn.textContent = '🧐 Thinking...';
+        btn.style.opacity = '0.5';
+        btn.style.cursor = 'not-allowed';
+        btn.disabled = true;
+
+        document.getElementById('answerSection').style.display = 'none';
+        document.getElementById('sourcesSection').style.display = 'none';
+        document.getElementById('errorState').style.display = 'none';
+
+        const payload = { question, k: 5 };
+        if (selectedPlay) payload.filters = { play: selectedPlay.title };
+
+        try {
+            const res = await axios.post(`${BACKEND_URL}/answer`, payload);
+            displayAnswer(question, res.data.answer, res.data.sources);
+        } catch (err) {
+            document.getElementById('errorText').textContent = err.response?.data?.detail || err.message || 'An unexpected error occurred.';
+            document.getElementById('errorState').style.display = 'block';
+        } finally {
+            btn.textContent = 'Send';
+            btn.style.opacity = '1';
+            btn.style.cursor = 'pointer';
+            btn.disabled = false;
+        }
+    }
+
+    function displayAnswer(question, answer, sources) {
+        document.getElementById('questionDisplay').textContent = question;
+        document.getElementById('detailedAnswer').innerHTML = marked.parse(answer);
+        document.getElementById('answerSection').style.display = 'block';
+
+        if (sources && sources.length > 0) {
+            document.getElementById('sourcesList').innerHTML = sources.map(s => `
+                <div style="background: linear-gradient(135deg, #F0FFF4 0%, #E6FFFA 100%); border-radius: 12px; padding: 20px; border: 1px solid #C6F6D5; transition: all 0.3s cubic-bezier(0.4,0,0.2,1);"
+                     onmouseenter="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 25px rgba(45,90,39,0.15)';"
+                     onmouseleave="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <h4 style="font-weight: 600; color: #6B46C1; margin: 0 0 4px 0;">${s.play} - ${s.act}</h4>
+                            <p style="color: #6B46C1; font-size: 14px; margin: 0;">${s.scene_title.split('.')[0]}</p>
+                        </div>
+                        <span style="font-size: 12px; background: linear-gradient(135deg, #6B46C1 0%, #553C9A 100%); color: white; padding: 6px 12px; border-radius: 20px; font-weight: 600; box-shadow: 0 2px 8px rgba(107,70,193,0.3); white-space: nowrap;">
+                            ${s.similarity}
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+            document.getElementById('sourcesSection').style.display = 'block';
+        }
+    }
+
+    document.getElementById('searchInput').addEventListener('keypress', e => {
+        if (e.key === 'Enter') askQuestion();
+    });
+
+    document.getElementById('filterToggle').addEventListener('change', e => {
+        populatePlays(e.target.checked ? 'Tragedy' : null);
+        if (selectedPlay && e.target.checked && selectedPlay.category !== 'Tragedy') {
+            deselectPlay();
+        }
+    });
+
+    populatePlays();
+</script>
+</body>
+</html>
