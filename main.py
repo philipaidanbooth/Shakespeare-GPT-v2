@@ -27,19 +27,22 @@ def _get_db():
     return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
 
 def _init_db():
-    with _get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS query_logs (
-                    id          SERIAL PRIMARY KEY,
-                    question    TEXT NOT NULL,
-                    play_filter TEXT,
-                    answer      TEXT NOT NULL,
-                    sources     JSONB,
-                    duration_ms INTEGER,
-                    created_at  TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
+    try:
+        with _get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS query_logs (
+                        id          SERIAL PRIMARY KEY,
+                        question    TEXT NOT NULL,
+                        play_filter TEXT,
+                        answer      TEXT NOT NULL,
+                        sources     JSONB,
+                        duration_ms INTEGER,
+                        created_at  TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+    except Exception as e:
+        print(f"Warning: could not initialise database ({e}). Query logging will be disabled.")
 
 _init_db()
 
