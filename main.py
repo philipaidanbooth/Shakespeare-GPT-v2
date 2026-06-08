@@ -24,7 +24,10 @@ load_dotenv()
 # --- Database ---
 
 def _get_db():
-    return psycopg2.connect(os.environ["DATABASE_URL"], sslmode="require")
+    url = os.environ["DATABASE_URL"]
+    if "sslmode" not in url:
+        url += "?sslmode=require"
+    return psycopg2.connect(url)
 
 def _init_db():
     try:
@@ -41,8 +44,9 @@ def _init_db():
                         created_at  TIMESTAMPTZ DEFAULT NOW()
                     )
                 """)
+        print("Database initialised successfully.")
     except Exception as e:
-        print(f"Warning: could not initialise database ({e}). Query logging will be disabled.")
+        print(f"Warning: could not initialise database ({type(e).__name__}: {e}). Query logging will be disabled.")
 
 _init_db()
 
