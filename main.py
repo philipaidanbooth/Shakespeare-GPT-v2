@@ -196,7 +196,11 @@ def health():
 @app.post("/answer", response_model=AnswerResponse)
 async def answer(request: AnswerRequest):
     play_filter = request.filters.get("play") if request.filters else None
-    retriever = _build_retriever(request.question, request.k, play_filter)
+    try:
+        retriever = _build_retriever(request.question, request.k, play_filter)
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"build_retriever failed: {traceback.format_exc()}")
 
     t0 = time.monotonic()
 
@@ -210,7 +214,11 @@ async def answer(request: AnswerRequest):
         for d in docs
     )
 
-    response = (PROMPT | llm).invoke({"context": context, "question": request.question})
+    try:
+        response = (PROMPT | llm).invoke({"context": context, "question": request.question})
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"llm failed: {traceback.format_exc()}")
 
     sources = [
         Source(
