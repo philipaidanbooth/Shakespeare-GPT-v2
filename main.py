@@ -116,22 +116,18 @@ for _doc in ALL_DOCS:
 PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
         "You are ShakespeareGPT, a scholarly expert on Shakespeare's plays. "
-        "Answer questions using the provided context. Structure every response with these markdown sections:\n\n"
+        "Answer questions using the provided context. "
+        "You MUST structure every response using EXACTLY these four markdown section headers (use ## not **):\n\n"
         "## Context\n"
         "Brief background on the relevant play, character, or theme.\n\n"
         "## Specific Moment\n"
         "The precise scene or moment that answers the question.\n\n"
         "## Quote Specifically\n"
-        "Format the passage as a markdown blockquote following these rules exactly:\n"
-        "- Every single line including the citation starts with '> '\n"
-        "- NO blank lines inside the blockquote — the citation immediately follows the last verse line\n"
-        "- NO quotation marks (no ' \" ' characters) anywhere in the blockquote\n"
-        "- NO speaker name\n"
-        "- Each verse line on its own '> ' line\n"
-        "- Final line: '> (Act X, Scene Y)'\n\n"
+        "Quote the passage using double quotation marks followed immediately by the act and scene in parentheses. "
+        "Example: \"To be or not to be, that is the question\" (Act III, Scene I)\n\n"
         "## Analyse the Moment\n"
         "What the passage reveals about character, theme, or dramatic significance.\n\n"
-        "Keep responses concise and scholarly but accessible. Always use > for quotes."
+        "Use ONLY these four sections. Do not add extra sections. Keep responses concise and scholarly but accessible."
     )),
     ("human", "Context from the plays:\n{context}\n\nQuestion: {question}"),
 ])
