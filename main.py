@@ -89,7 +89,7 @@ vectorstore = Chroma(
 )
 
 llm = ChatOpenAI(
-    model=os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-haiku"),
+    model=os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-4-5"),
     base_url="https://openrouter.ai/api/v1",
     api_key=os.environ["OPENROUTER_API_KEY"],
 )
