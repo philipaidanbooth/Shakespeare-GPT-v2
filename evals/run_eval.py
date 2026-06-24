@@ -37,6 +37,7 @@ REQUIRED_SECTIONS = [
 ]
 
 ACT_CITATION_RE = re.compile(r'\(Act\s+([\w]+),\s+Scene\s+([\w]+)\)', re.IGNORECASE)
+QUOTE_TEXT_RE = re.compile(r'"([^"]{20,})"')
 ACT_PREFIX_RE = re.compile(r'ACT\s+([\w]+)', re.IGNORECASE)
 SCENE_PREFIX_RE = re.compile(r'SCENE\s+([\w]+)', re.IGNORECASE)
 
@@ -139,13 +140,24 @@ def check_format(sections: dict) -> bool:
     return all(s in sections for s in REQUIRED_SECTIONS)
 
 
-def check_citation(sections: dict, sources: list) -> bool:
+def check_citation(answer: str, sources: list) -> bool:
     """
-    Verify the (Act X, Scene Y) cited in ## Quote Specifically matches at least
-    one returned source by both act and scene.
+    Verify the cited quote actually exists in a retrieved chunk.
+    Primary: extract the quoted text, take the first 6 words as a key phrase,
+    and check if it appears in any source's text content.
+    Fallback: if no quoted text found, check act/scene metadata match.
     """
-    quote_text = sections.get("## Quote Specifically", "")
-    cited_act, cited_scene = extract_cited_act_scene(quote_text)
+    m = QUOTE_TEXT_RE.search(answer)
+    if m:
+        words = re.sub(r'[^\w\s]', '', m.group(1).lower()).split()
+        key_phrase = ' '.join(words[:6])
+        for s in sources:
+            chunk = re.sub(r'[^\w\s]', '', s.get("text", "").lower())
+            if key_phrase in chunk:
+                return True
+        return False
+    # Fallback: act/scene metadata match
+    cited_act, cited_scene = extract_cited_act_scene(answer)
     if not cited_act or not cited_scene or not sources:
         return False
     source_act_scenes = {
@@ -182,7 +194,7 @@ def llm_judge(
         return 0, f"Judge error: {e}"
 
 
-def run_eval(base_url: str, dataset_path: Path, output_path: Path):
+def run_eval(base_url: str, dataset_path: Path, output_path: Path) -> tuple:
     df = pd.read_csv(dataset_path)
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
@@ -223,7 +235,7 @@ def run_eval(base_url: str, dataset_path: Path, output_path: Path):
         sections = parse_sections(answer)
 
         format_ok = check_format(sections)
-        citation_ok = check_citation(sections, sources)
+        citation_ok = check_citation(answer, sources)
         judge_score, judge_reasoning = llm_judge(client, question, reference, answer)
 
         results.append({
@@ -273,6 +285,45 @@ def run_eval(base_url: str, dataset_path: Path, output_path: Path):
                 f"citation={g['citation_ok'].mean():.0%}"
             )
 
+    return results_df, valid, int(errors)
+
+
+def save_to_db(results_df: pd.DataFrame, valid: pd.DataFrame, errors: int):
+    import psycopg2
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("DATABASE_URL not set — skipping DB save")
+        return
+    if "sslmode" not in db_url:
+        db_url += "?sslmode=require"
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO eval_runs (total, errors, format_pct, citation_pct, judge_avg) "
+                "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (
+                    len(results_df),
+                    errors,
+                    float(valid["format_ok"].mean()) if len(valid) > 0 else 0.0,
+                    float(valid["citation_ok"].mean()) if len(valid) > 0 else 0.0,
+                    float(valid["judge_score"].mean()) if len(valid) > 0 else 0.0,
+                ),
+            )
+            run_id = cur.fetchone()[0]
+            for _, row in results_df.iterrows():
+                cur.execute(
+                    "INSERT INTO eval_results "
+                    "(run_id, question, play, type, format_ok, citation_ok, judge_score, judge_reasoning, api_error) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        run_id, row["question"], row["play"], row["type"],
+                        bool(row["format_ok"]), bool(row["citation_ok"]),
+                        int(row["judge_score"]), str(row["judge_reasoning"]),
+                        bool(row["api_error"]),
+                    ),
+                )
+    print(f"Saved to DB (run_id={run_id})")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Shakespeare GPT evals")
@@ -288,11 +339,17 @@ if __name__ == "__main__":
         "--output", default=None,
         help="Output CSV path (default: evals/results_YYYYMMDD_HHMMSS.csv)",
     )
+    parser.add_argument(
+        "--save-to-db", action="store_true",
+        help="Save results to Railway Postgres DB for display on the evals page",
+    )
     args = parser.parse_args()
 
     output = args.output or f"evals/results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    run_eval(
+    results_df, valid, errors = run_eval(
         base_url=args.url.rstrip("/"),
         dataset_path=Path(args.dataset),
         output_path=Path(output),
     )
+    if args.save_to_db:
+        save_to_db(results_df, valid, errors)

@@ -44,6 +44,31 @@ def _init_db():
                         created_at  TIMESTAMPTZ DEFAULT NOW()
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS eval_runs (
+                        id           SERIAL PRIMARY KEY,
+                        run_at       TIMESTAMPTZ DEFAULT NOW(),
+                        total        INTEGER,
+                        errors       INTEGER,
+                        format_pct   FLOAT,
+                        citation_pct FLOAT,
+                        judge_avg    FLOAT
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS eval_results (
+                        id              SERIAL PRIMARY KEY,
+                        run_id          INTEGER REFERENCES eval_runs(id),
+                        question        TEXT,
+                        play            TEXT,
+                        type            TEXT,
+                        format_ok       BOOLEAN,
+                        citation_ok     BOOLEAN,
+                        judge_score     INTEGER,
+                        judge_reasoning TEXT,
+                        api_error       BOOLEAN
+                    )
+                """)
         print("Database initialised successfully.")
     except Exception as e:
         print(f"Warning: could not initialise database ({type(e).__name__}: {e}). Query logging will be disabled.")
@@ -154,6 +179,7 @@ class Source(BaseModel):
     act: str
     scene_title: str
     similarity: float
+    text: str
 
 
 class AnswerResponse(BaseModel):
@@ -231,6 +257,7 @@ async def answer(request: AnswerRequest):
             act=d.metadata.get("act", ""),
             scene_title=d.metadata.get("scene_title", ""),
             similarity=round(float(d.metadata.get("relevance_score", 0.0)), 4),
+            text=d.page_content,
         )
         for i, d in enumerate(docs)
     ]
@@ -245,3 +272,43 @@ async def answer(request: AnswerRequest):
     )
 
     return AnswerResponse(answer=response.content, sources=sources)
+
+
+@app.get("/eval-results")
+def get_eval_results():
+    try:
+        with _get_db() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM eval_runs ORDER BY run_at DESC LIMIT 1")
+                run = cur.fetchone()
+                if not run:
+                    return {"run": None, "by_play": [], "by_type": []}
+                run_id = run["id"]
+
+                cur.execute("""
+                    SELECT play,
+                           COUNT(*)                                                    AS total,
+                           ROUND(AVG(judge_score)::numeric, 2)                        AS judge_avg,
+                           ROUND(AVG(CASE WHEN citation_ok THEN 1.0 ELSE 0.0 END)::numeric, 2) AS citation_pct,
+                           ROUND(AVG(CASE WHEN format_ok   THEN 1.0 ELSE 0.0 END)::numeric, 2) AS format_pct
+                    FROM eval_results
+                    WHERE run_id = %s AND NOT api_error
+                    GROUP BY play ORDER BY play
+                """, (run_id,))
+                by_play = [dict(r) for r in cur.fetchall()]
+
+                cur.execute("""
+                    SELECT type,
+                           COUNT(*)                                                    AS total,
+                           ROUND(AVG(judge_score)::numeric, 2)                        AS judge_avg,
+                           ROUND(AVG(CASE WHEN citation_ok THEN 1.0 ELSE 0.0 END)::numeric, 2) AS citation_pct,
+                           ROUND(AVG(CASE WHEN format_ok   THEN 1.0 ELSE 0.0 END)::numeric, 2) AS format_pct
+                    FROM eval_results
+                    WHERE run_id = %s AND NOT api_error
+                    GROUP BY type ORDER BY type
+                """, (run_id,))
+                by_type = [dict(r) for r in cur.fetchall()]
+
+                return {"run": dict(run), "by_play": by_play, "by_type": by_type}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
