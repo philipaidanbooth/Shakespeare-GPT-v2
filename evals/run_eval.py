@@ -40,6 +40,32 @@ ACT_CITATION_RE = re.compile(r'\(Act\s+([\w]+),\s+Scene\s+([\w]+)\)', re.IGNOREC
 ACT_PREFIX_RE = re.compile(r'ACT\s+([\w]+)', re.IGNORECASE)
 SCENE_PREFIX_RE = re.compile(r'SCENE\s+([\w]+)', re.IGNORECASE)
 
+BOLD_HEADER_RE = re.compile(r'^\*\*(.+?)\*\*:?\s*$')
+
+# Checked in priority order — phrase matches before single-word matches
+SECTION_MAP = [
+    ("## Analyse the Moment", re.compile(r'analys', re.IGNORECASE)),
+    ("## Specific Moment",    re.compile(r'specific moment|specific scene|dramatic situation', re.IGNORECASE)),
+    ("## Quote Specifically", re.compile(r'quote', re.IGNORECASE)),
+    ("## Specific Moment",    re.compile(r'\bspecific\b|\bmoment\b|\bscene\b', re.IGNORECASE)),
+    ("## Context",            re.compile(r'context|background|dramatic', re.IGNORECASE)),
+]
+
+
+def detect_header(line: str) -> Optional[str]:
+    """Return canonical section name if line is a ## or **bold** header, else None."""
+    stripped = line.strip()
+    for canonical in REQUIRED_SECTIONS:
+        if stripped.startswith(canonical):
+            return canonical
+    m = BOLD_HEADER_RE.match(stripped)
+    if m:
+        text = m.group(1)
+        for canonical, pattern in SECTION_MAP:
+            if pattern.search(text):
+                return canonical
+    return None
+
 JUDGE_SYSTEM = (
     "You are a Shakespeare literature expert grading an AI assistant's response. "
     "Return ONLY valid JSON with no extra text."
@@ -65,12 +91,12 @@ Return ONLY: {{"score": <int 1-5>, "reasoning": "<one sentence>"}}"""
 
 
 def parse_sections(answer: str) -> dict:
-    """Split markdown answer into its named sections."""
+    """Split markdown answer into its named sections, handling both ## and **bold** headers."""
     parts = {}
     current_header = None
     buf = []
     for line in answer.split('\n'):
-        matched = next((s for s in REQUIRED_SECTIONS if line.strip().startswith(s)), None)
+        matched = detect_header(line)
         if matched:
             if current_header is not None:
                 parts[current_header] = '\n'.join(buf).strip()
