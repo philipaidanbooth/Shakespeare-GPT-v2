@@ -156,13 +156,15 @@ def check_format(sections: dict) -> bool:
     return all(s in sections for s in REQUIRED_SECTIONS)
 
 
-def check_citation(answer: str, sources: list) -> bool:
+def check_citation(answer: str, sources: list):
     """
-    Verify the cited quote actually exists in a retrieved chunk.
-    Primary: extract the quoted text, take the first 6 words as a key phrase,
-    and check if it appears in any source's text content.
-    Fallback: if no quoted text found, check act/scene metadata match.
+    Verify the cited quote exists in a retrieved chunk. Returns True/False/None.
+    None means chunk text wasn't available (old backend build) — not a failure.
     """
+    # If no source has text content, we can't verify — report as unavailable
+    if not any(s.get("text", "") for s in sources):
+        return None
+
     m = QUOTE_TEXT_RE.search(answer)
     if m:
         words = re.sub(r'[^\w\s]', '', m.group(1).lower()).split()
@@ -172,6 +174,7 @@ def check_citation(answer: str, sources: list) -> bool:
             if key_phrase in chunk:
                 return True
         return False
+
     # Fallback: act/scene metadata match
     cited_act, cited_scene = extract_cited_act_scene(answer)
     if not cited_act or not cited_scene or not sources:
@@ -196,6 +199,7 @@ def llm_judge(
         msg = client.chat.completions.create(
             model="anthropic/claude-haiku-4-5",
             max_tokens=300,
+            temperature=0,
             messages=[
                 {"role": "system", "content": JUDGE_SYSTEM},
                 {"role": "user", "content": JUDGE_EXAMPLE_Q},
@@ -211,13 +215,15 @@ def llm_judge(
         return int(data["score"]), str(data.get("reasoning", ""))
     except json.JSONDecodeError:
         m = re.search(r'"score"\s*:\s*(\d)', text)
-        return (int(m.group(1)) if m else 0), f"JSON parse error: {text[:80]}"
+        return (int(m.group(1)) if m else None), f"JSON parse error: {text[:80]}"
     except Exception as e:
-        return 0, f"Judge error: {e}"
+        return None, f"Judge error: {e}"
 
 
-def run_eval(base_url: str, dataset_path: Path, output_path: Path) -> tuple:
+def run_eval(base_url: str, dataset_path: Path, output_path: Path, limit: Optional[int] = None) -> tuple:
     df = pd.read_csv(dataset_path)
+    if limit:
+        df = df.head(limit)
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
@@ -271,10 +277,12 @@ def run_eval(base_url: str, dataset_path: Path, output_path: Path) -> tuple:
             "api_error": False,
         })
 
+        cite_str = "N/A" if citation_ok is None else ("✓" if citation_ok else "✗")
+        judge_str = f"{judge_score}/5" if judge_score is not None else "err"
         print(
             f"format={'✓' if format_ok else '✗'}  "
-            f"citation={'✓' if citation_ok else '✗'}  "
-            f"judge={judge_score}/5"
+            f"citation={cite_str}  "
+            f"judge={judge_str}"
         )
 
     results_df = pd.DataFrame(results)
@@ -283,29 +291,39 @@ def run_eval(base_url: str, dataset_path: Path, output_path: Path) -> tuple:
     valid = results_df[~results_df["api_error"]]
     errors = results_df["api_error"].sum()
 
+    scored = valid[valid["judge_score"].notna()]
+    cited  = valid[valid["citation_ok"].notna()]
+    parse_errors = valid["judge_score"].isna().sum()
+
     print(f"\n{'='*55}")
     print(f"Results → {output_path}")
-    print(f"\nOverall  ({len(valid)}/{total} successful, {errors} errors)")
+    print(f"\nOverall  ({len(valid)}/{total} answered, {errors} API errors)")
     print(f"  Format compliance:   {valid['format_ok'].mean():.0%}")
-    print(f"  Citation accuracy:   {valid['citation_ok'].mean():.0%}")
-    print(f"  Judge score (mean):  {valid['judge_score'].mean():.2f} / 5")
+    if len(cited) > 0:
+        print(f"  Citation accuracy:   {cited['citation_ok'].mean():.0%}  ({len(valid)-len(cited)} N/A)")
+    else:
+        print(f"  Citation accuracy:   N/A (no chunk text returned — redeploy backend)")
+    if len(scored) > 0:
+        print(f"  Judge score (mean):  {scored['judge_score'].mean():.2f} / 5  ({parse_errors} parse errors excluded)")
+    else:
+        print(f"  Judge score (mean):  N/A ({parse_errors} parse errors)")
 
     if len(valid) > 0:
         print(f"\nBy play:")
         for play, g in valid.groupby("play"):
-            print(
-                f"  {play:<32} "
-                f"judge={g['judge_score'].mean():.2f}  "
-                f"citation={g['citation_ok'].mean():.0%}"
-            )
+            g_scored = g[g["judge_score"].notna()]
+            g_cited  = g[g["citation_ok"].notna()]
+            judge_s  = f"{g_scored['judge_score'].mean():.2f}" if len(g_scored) else "N/A"
+            cite_s   = f"{g_cited['citation_ok'].mean():.0%}" if len(g_cited) else "N/A"
+            print(f"  {play:<32} judge={judge_s}  citation={cite_s}")
 
         print(f"\nBy type:")
         for qtype, g in valid.groupby("type"):
-            print(
-                f"  {qtype:<12} "
-                f"judge={g['judge_score'].mean():.2f}  "
-                f"citation={g['citation_ok'].mean():.0%}"
-            )
+            g_scored = g[g["judge_score"].notna()]
+            g_cited  = g[g["citation_ok"].notna()]
+            judge_s  = f"{g_scored['judge_score'].mean():.2f}" if len(g_scored) else "N/A"
+            cite_s   = f"{g_cited['citation_ok'].mean():.0%}" if len(g_cited) else "N/A"
+            print(f"  {qtype:<12} judge={judge_s}  citation={cite_s}")
 
     return results_df, valid, int(errors)
 
@@ -320,6 +338,8 @@ def save_to_db(results_df: pd.DataFrame, valid: pd.DataFrame, errors: int):
         db_url += "?sslmode=require"
     with psycopg2.connect(db_url) as conn:
         with conn.cursor() as cur:
+            scored = valid[valid["judge_score"].notna()]
+            cited  = valid[valid["citation_ok"].notna()]
             cur.execute(
                 "INSERT INTO eval_runs (total, errors, format_pct, citation_pct, judge_avg) "
                 "VALUES (%s, %s, %s, %s, %s) RETURNING id",
@@ -327,8 +347,8 @@ def save_to_db(results_df: pd.DataFrame, valid: pd.DataFrame, errors: int):
                     len(results_df),
                     errors,
                     float(valid["format_ok"].mean()) if len(valid) > 0 else 0.0,
-                    float(valid["citation_ok"].mean()) if len(valid) > 0 else 0.0,
-                    float(valid["judge_score"].mean()) if len(valid) > 0 else 0.0,
+                    float(cited["citation_ok"].mean()) if len(cited) > 0 else None,
+                    float(scored["judge_score"].mean()) if len(scored) > 0 else None,
                 ),
             )
             run_id = cur.fetchone()[0]
@@ -365,6 +385,10 @@ if __name__ == "__main__":
         "--save-to-db", action="store_true",
         help="Save results to Railway Postgres DB for display on the evals page",
     )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Only evaluate the first N questions (useful for smoke tests)",
+    )
     args = parser.parse_args()
 
     output = args.output or f"evals/results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -372,6 +396,7 @@ if __name__ == "__main__":
         base_url=args.url.rstrip("/"),
         dataset_path=Path(args.dataset),
         output_path=Path(output),
+        limit=args.limit,
     )
     if args.save_to_db:
         save_to_db(results_df, valid, errors)
