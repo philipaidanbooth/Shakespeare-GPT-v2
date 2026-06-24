@@ -194,30 +194,36 @@ def llm_judge(
 ) -> tuple:
     """Ask Claude Haiku via OpenRouter to score answer vs reference. Returns (score, reasoning)."""
     prompt = JUDGE_PROMPT.format(question=question, reference=reference, answer=answer)
-    text = ""
-    try:
-        msg = client.chat.completions.create(
-            model="anthropic/claude-haiku-4-5",
-            max_tokens=300,
-            temperature=0,
-            messages=[
-                {"role": "system", "content": JUDGE_SYSTEM},
-                {"role": "user", "content": JUDGE_EXAMPLE_Q},
-                {"role": "assistant", "content": JUDGE_EXAMPLE_A},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        text = msg.choices[0].message.content.strip()
-        # Strip markdown code fences if model wraps in ```json ... ```
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        data = json.loads(text)
-        return int(data["score"]), str(data.get("reasoning", ""))
-    except json.JSONDecodeError:
-        m = re.search(r'"score"\s*:\s*(\d)', text)
-        return (int(m.group(1)) if m else None), f"JSON parse error: {text[:80]}"
-    except Exception as e:
-        return None, f"Judge error: {e}"
+    messages = [
+        {"role": "system", "content": JUDGE_SYSTEM},
+        {"role": "user", "content": JUDGE_EXAMPLE_Q},
+        {"role": "assistant", "content": JUDGE_EXAMPLE_A},
+        {"role": "user", "content": prompt},
+    ]
+
+    for attempt in range(2):
+        text = ""
+        try:
+            msg = client.chat.completions.create(
+                model="anthropic/claude-haiku-4-5",
+                max_tokens=300,
+                temperature=0,
+                response_format={"type": "json_object"},
+                messages=messages,
+            )
+            text = msg.choices[0].message.content.strip()
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            text = re.sub(r'\s*```$', '', text)
+            data = json.loads(text)
+            return int(data["score"]), str(data.get("reasoning", ""))
+        except json.JSONDecodeError:
+            if attempt == 0:
+                continue  # retry once
+            return None, f"JSON parse error after 2 attempts: {text[:80]}"
+        except Exception as e:
+            return None, f"Judge error: {e}"
+
+    return None, "Judge failed after 2 attempts"
 
 
 def run_eval(base_url: str, dataset_path: Path, output_path: Path, limit: Optional[int] = None) -> tuple:
