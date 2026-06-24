@@ -43,13 +43,14 @@ SCENE_PREFIX_RE = re.compile(r'SCENE\s+([\w]+)', re.IGNORECASE)
 
 BOLD_HEADER_RE = re.compile(r'^\*\*(.+?)\*\*:?\s*$')
 
-# Checked in priority order — phrase matches before single-word matches
+# Checked in priority order — explicit word matches before ambiguous phrase matches
 SECTION_MAP = [
     ("## Analyse the Moment", re.compile(r'analys', re.IGNORECASE)),
+    ("## Context",            re.compile(r'\bcontext\b|\bbackground\b', re.IGNORECASE)),
     ("## Specific Moment",    re.compile(r'specific moment|specific scene|dramatic situation', re.IGNORECASE)),
     ("## Quote Specifically", re.compile(r'quote', re.IGNORECASE)),
     ("## Specific Moment",    re.compile(r'\bspecific\b|\bmoment\b|\bscene\b', re.IGNORECASE)),
-    ("## Context",            re.compile(r'context|background|dramatic', re.IGNORECASE)),
+    ("## Context",            re.compile(r'\bdramatic\b', re.IGNORECASE)),
 ]
 
 
@@ -69,8 +70,25 @@ def detect_header(line: str) -> Optional[str]:
 
 JUDGE_SYSTEM = (
     "You are a Shakespeare literature expert grading an AI assistant's response. "
-    "Return ONLY valid JSON with no extra text."
+    "You must respond with ONLY a JSON object — no markdown, no code blocks, no extra text."
 )
+
+JUDGE_EXAMPLE_Q = """\
+Question: Why does Hamlet delay killing Claudius?
+
+Reference answer: Hamlet delays because he is a deeply thoughtful and philosophical person who is paralyzed by doubt.
+
+AI answer to grade:
+Hamlet hesitates because he fears making a mistake and struggles with moral uncertainty.
+
+Score the AI answer 1-5:
+5 = Excellent: covers all key points accurately, may go beyond the reference
+4 = Good: covers most key points, minor gaps only
+3 = Adequate: addresses the core point but misses important detail
+2 = Weak: partially addresses the question with notable errors or gaps
+1 = Poor: wrong, fabricated, or fails to address the question"""
+
+JUDGE_EXAMPLE_A = '{"score": 3, "reasoning": "Captures the hesitation but omits the philosophical depth and specific theological reasoning shown in the play."}'
 
 JUDGE_PROMPT = """\
 Question: {question}
@@ -86,9 +104,7 @@ Score the AI answer 1-5:
 4 = Good: covers most key points, minor gaps only
 3 = Adequate: addresses the core point but misses important detail
 2 = Weak: partially addresses the question with notable errors or gaps
-1 = Poor: wrong, fabricated, or fails to address the question
-
-Return ONLY: {{"score": <int 1-5>, "reasoning": "<one sentence>"}}"""
+1 = Poor: wrong, fabricated, or fails to address the question"""
 
 
 def parse_sections(answer: str) -> dict:
@@ -175,21 +191,27 @@ def llm_judge(
 ) -> tuple:
     """Ask Claude Haiku via OpenRouter to score answer vs reference. Returns (score, reasoning)."""
     prompt = JUDGE_PROMPT.format(question=question, reference=reference, answer=answer)
+    text = ""
     try:
         msg = client.chat.completions.create(
             model="anthropic/claude-haiku-4-5",
-            max_tokens=256,
+            max_tokens=300,
             messages=[
                 {"role": "system", "content": JUDGE_SYSTEM},
+                {"role": "user", "content": JUDGE_EXAMPLE_Q},
+                {"role": "assistant", "content": JUDGE_EXAMPLE_A},
                 {"role": "user", "content": prompt},
             ],
         )
         text = msg.choices[0].message.content.strip()
+        # Strip markdown code fences if model wraps in ```json ... ```
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
         data = json.loads(text)
         return int(data["score"]), str(data.get("reasoning", ""))
     except json.JSONDecodeError:
-        m = re.search(r'"score"\s*:\s*(\d)', text if 'text' in dir() else "")
-        return (int(m.group(1)) if m else 0), "JSON parse error"
+        m = re.search(r'"score"\s*:\s*(\d)', text)
+        return (int(m.group(1)) if m else 0), f"JSON parse error: {text[:80]}"
     except Exception as e:
         return 0, f"Judge error: {e}"
 
