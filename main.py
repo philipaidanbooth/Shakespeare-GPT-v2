@@ -190,7 +190,8 @@ class AnswerResponse(BaseModel):
 
 def _build_retriever(question: str, k: int, play_filter: Optional[str]) -> ContextualCompressionRetriever:
     # Term-based: BM25 over play-filtered or full corpus
-    bm25_docs = DOCS_BY_PLAY[play_filter] if play_filter else ALL_DOCS
+    # Fall back to full corpus if play name doesn't match any stored metadata key
+    bm25_docs = (DOCS_BY_PLAY[play_filter] or ALL_DOCS) if play_filter else ALL_DOCS
     bm25 = BM25Retriever.from_documents(bm25_docs, k=k)
 
     # Semantic: ChromaDB vector search with optional metadata filter
@@ -221,6 +222,11 @@ def _build_retriever(question: str, k: int, play_filter: Optional[str]) -> Conte
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/plays")
+def plays():
+    return {"plays": sorted(DOCS_BY_PLAY.keys()), "total_docs": len(ALL_DOCS)}
 
 
 @app.post("/answer", response_model=AnswerResponse)
