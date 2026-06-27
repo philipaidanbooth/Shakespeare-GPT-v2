@@ -226,7 +226,15 @@ def health():
 
 @app.get("/plays")
 def plays():
-    return {"plays": sorted(DOCS_BY_PLAY.keys()), "total_docs": len(ALL_DOCS)}
+    # Show all metadata keys from a sample of docs to debug field name mismatches
+    sample_meta = [d.metadata for d in ALL_DOCS[:5]] if ALL_DOCS else []
+    return {
+        "total_docs": len(ALL_DOCS),
+        "plays_by_metadata_play_field": sorted(k for k in DOCS_BY_PLAY.keys() if k),
+        "docs_with_no_play_field": len(DOCS_BY_PLAY.get("", [])),
+        "sample_metadata_keys": [list(m.keys()) for m in sample_meta],
+        "sample_metadata": sample_meta,
+    }
 
 
 @app.post("/answer", response_model=AnswerResponse)

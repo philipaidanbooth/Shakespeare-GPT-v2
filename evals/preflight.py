@@ -135,7 +135,10 @@ def check_judge(answer_data: dict | None):
                 {"role": "user", "content": 'Score this answer 1-5: "Iago hates Othello because of jealousy." vs reference "Iago hates Othello due to jealousy and suspected affair."'},
             ],
         )
+        import re
         text = msg.choices[0].message.content.strip()
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
         data = json.loads(text)
         check("Judge returns valid JSON", True)
         check("JSON has 'score' field", "score" in data, str(data))
