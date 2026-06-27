@@ -395,7 +395,22 @@ if __name__ == "__main__":
         "--limit", type=int, default=None,
         help="Only evaluate the first N questions (useful for smoke tests)",
     )
+    parser.add_argument(
+        "--from-csv", default=None,
+        help="Skip eval run and save an existing results CSV directly to DB",
+    )
     args = parser.parse_args()
+
+    if args.from_csv:
+        results_df = pd.read_csv(args.from_csv)
+        valid = results_df[~results_df["api_error"]]
+        errors = int(results_df["api_error"].sum())
+        print(f"Loaded {len(results_df)} rows from {args.from_csv}")
+        if args.save_to_db:
+            save_to_db(results_df, valid, errors)
+        else:
+            print("Pass --save-to-db to write to the database.")
+        sys.exit(0)
 
     output = args.output or f"evals/results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     results_df, valid, errors = run_eval(
