@@ -121,14 +121,24 @@ llm = ChatOpenAI(
 
 # --- Startup: load all docs for BM25 ---
 
-def _load_docs() -> list[Document]: 
-    raw = chroma_client.get_collection("shakespeare_scenes").get(
-        include=["documents", "metadatas"]
-    )
-    return [
-        Document(page_content=doc, metadata=meta)
-        for doc, meta in zip(raw["documents"], raw["metadatas"])
-    ]
+def _load_docs() -> list[Document]:
+    col = chroma_client.get_collection("shakespeare_scenes")
+    docs = []
+    offset = 0
+    batch = 300
+    while True:
+        raw = col.get(include=["documents", "metadatas"], limit=batch, offset=offset)
+        if not raw["documents"]:
+            break
+        docs.extend(
+            Document(page_content=doc, metadata=meta)
+            for doc, meta in zip(raw["documents"], raw["metadatas"])
+        )
+        offset += batch
+        if len(raw["documents"]) < batch:
+            break
+    print(f"Loaded {len(docs)} docs from ChromaDB.")
+    return docs
 
 ALL_DOCS: list[Document] = _load_docs() 
 
