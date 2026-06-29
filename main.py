@@ -198,13 +198,37 @@ class AnswerResponse(BaseModel):
 
 # --- Retrieval ---
 
+HYDE_PROMPT = ChatPromptTemplate.from_messages([
+    ("system",
+     "You are a Shakespeare scholar. Given a question about Shakespeare's plays, "
+     "write a 2-3 sentence hypothetical passage that would appear in a scholarly "
+     "analysis or the play itself to answer this question. Use character names, "
+     "Elizabethan vocabulary, and thematic keywords. Return ONLY the passage."),
+    ("human", "{question}"),
+])
+
+
+def _hyde_query(question: str) -> str:
+    """Generate a hypothetical document for HyDE retrieval. Falls back to original question on error."""
+    try:
+        response = (HYDE_PROMPT | llm).invoke({"question": question})
+        return response.content.strip()
+    except Exception:
+        return question
+
+
 def _build_retriever(question: str, k: int, play_filter: Optional[str]) -> ContextualCompressionRetriever:
+    # HyDE: generate a hypothetical passage for semantic search
+    # BM25 keeps the original question for keyword matching
+    hyde_question = _hyde_query(question)
+
     # Term-based: BM25 over play-filtered or full corpus
     # Fall back to full corpus if play name doesn't match any stored metadata key
     bm25_docs = (DOCS_BY_PLAY[play_filter] or ALL_DOCS) if play_filter else ALL_DOCS
     bm25 = BM25Retriever.from_documents(bm25_docs, k=k)
+    bm25.query = question  # BM25 uses original question keywords
 
-    # Semantic: ChromaDB vector search with optional metadata filter
+    # Semantic: ChromaDB vector search using HyDE query
     search_kwargs: dict = {"k": k}
     if play_filter:
         search_kwargs["filter"] = {"play": play_filter}
@@ -222,10 +246,13 @@ def _build_retriever(question: str, k: int, play_filter: Optional[str]) -> Conte
         top_n=k,
         model="rerank-v3.5",
     )
-    return ContextualCompressionRetriever(
+    retriever = ContextualCompressionRetriever(
         base_compressor=reranker,
         base_retriever=ensemble,
     )
+    # Store HyDE query so the endpoint can invoke with it for semantic search
+    retriever._hyde_query = hyde_question
+    return retriever
 
 # --- Routes ---
 
@@ -259,7 +286,8 @@ async def answer(request: AnswerRequest):
     t0 = time.monotonic()
 
     try:
-        docs = retriever.invoke(request.question)
+        hyde_q = getattr(retriever, "_hyde_query", request.question)
+        docs = retriever.invoke(hyde_q)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
