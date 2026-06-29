@@ -250,7 +250,7 @@ def run_eval(base_url: str, dataset_path: Path, output_path: Path, limit: Option
         try:
             resp = requests.post(
                 f"{base_url}/answer",
-                json={"question": question, "k": 5, "filters": {"play": play}},
+                json={"question": question, "k": 7, "filters": {"play": play}},
                 timeout=60,
             )
             resp.raise_for_status()
