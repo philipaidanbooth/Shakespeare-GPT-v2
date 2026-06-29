@@ -10,7 +10,6 @@ import psycopg2.extras
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_classic.retrievers import EnsembleRetriever, ContextualCompressionRetriever
 from langchain_chroma import Chroma
 from langchain_cohere import CohereRerank
 from langchain_community.retrievers import BM25Retriever
@@ -117,6 +116,7 @@ llm = ChatOpenAI(
     model=os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-4-5"),
     base_url="https://openrouter.ai/api/v1",
     api_key=os.environ["OPENROUTER_API_KEY"],
+    temperature=0,
 )
 
 # --- Startup: load all docs for BM25 ---
@@ -151,13 +151,23 @@ for _doc in ALL_DOCS:
 PROMPT = ChatPromptTemplate.from_messages([
     ("system", (
         "You are ShakespeareGPT, a scholarly expert on Shakespeare's plays. "
-        "Answer questions using the provided context. "
+        "Answer the user's question using ONLY the provided context from the plays. "
+        "Do not use outside knowledge or quote from memory.\n\n"
         "You MUST use EXACTLY these four ## markdown section headers in this order — no others, no bold headers:\n\n"
         "## Context\n"
         "## Specific Moment\n"
         "## Quote Specifically\n"
         "## Analyse the Moment\n\n"
-        "For ## Quote Specifically, place the passage in double quotation marks followed by (Act X, Scene Y).\n\n"
+        "Rules:\n"
+        "- In ## Context, briefly identify the broader situation in the play.\n"
+        "- In ## Specific Moment, explain the exact dramatic moment relevant to the question.\n"
+        "- In ## Quote Specifically, copy ONE passage VERBATIM from the provided context only.\n"
+        "- Do not alter the quote's wording, spelling, punctuation, or capitalisation.\n"
+        "- Put the quote in double quotation marks followed by its citation: (Act X, Scene Y).\n"
+        "- The Act and Scene must come from the same context chunk as the quoted passage.\n"
+        "- If the provided context does not contain a suitable quote, write exactly: "
+        "\"No suitable quote found in provided context.\"\n"
+        "- In ## Analyse the Moment, explain how the quote supports the answer.\n\n"
         "Example of the required format:\n\n"
         "## Context\n"
         "In *Hamlet*, Prince Hamlet is tasked by his father's ghost to avenge his murder at the hands of Claudius.\n\n"
@@ -179,7 +189,7 @@ PROMPT = ChatPromptTemplate.from_messages([
 
 class AnswerRequest(BaseModel):
     question: str
-    k: int = 5
+    k: int = 7
     filters: Optional[dict] = None
 
 
@@ -217,42 +227,40 @@ def _hyde_query(question: str) -> str:
         return question
 
 
-def _build_retriever(question: str, k: int, play_filter: Optional[str]) -> ContextualCompressionRetriever:
-    # HyDE: generate a hypothetical passage for semantic search
-    # BM25 keeps the original question for keyword matching
+def _build_retriever(question: str, k: int, play_filter: Optional[str]) -> list[Document]:
     hyde_question = _hyde_query(question)
 
-    # Term-based: BM25 over play-filtered or full corpus
-    # Fall back to full corpus if play name doesn't match any stored metadata key
-    bm25_docs = (DOCS_BY_PLAY[play_filter] or ALL_DOCS) if play_filter else ALL_DOCS
-    bm25 = BM25Retriever.from_documents(bm25_docs, k=k)
-    bm25.query = question  # BM25 uses original question keywords
+    # BM25: keyword search with original question
+    bm25_corpus = (DOCS_BY_PLAY[play_filter] or ALL_DOCS) if play_filter else ALL_DOCS
+    bm25 = BM25Retriever.from_documents(bm25_corpus, k=k)
+    bm25_results = bm25.invoke(question)
 
-    # Semantic: ChromaDB vector search using HyDE query
+    # Semantic: vector search with HyDE passage
     search_kwargs: dict = {"k": k}
     if play_filter:
         search_kwargs["filter"] = {"play": play_filter}
-    semantic = vectorstore.as_retriever(search_kwargs=search_kwargs)
+    semantic_results = vectorstore.similarity_search(hyde_question, **search_kwargs)
 
-    # Hybrid: Reciprocal Rank Fusion (semantic weighted slightly higher)
-    ensemble = EnsembleRetriever(
-        retrievers=[bm25, semantic],
-        weights=[0.4, 0.6],
-    )
+    # RRF fusion: BM25 weighted 0.4, semantic weighted 0.6
+    scores: dict[str, float] = {}
+    doc_map: dict[str, Document] = {}
+    for rank, doc in enumerate(bm25_results):
+        key = doc.page_content[:120]
+        scores[key] = scores.get(key, 0.0) + 0.4 * (1.0 / (rank + 60))
+        doc_map[key] = doc
+    for rank, doc in enumerate(semantic_results):
+        key = doc.page_content[:120]
+        scores[key] = scores.get(key, 0.0) + 0.6 * (1.0 / (rank + 60))
+        doc_map[key] = doc
+    fused = [doc_map[key] for key in sorted(scores, key=scores.__getitem__, reverse=True)]
 
-    # Rerank with Cohere
+    # Cohere rerank with original question
     reranker = CohereRerank(
         cohere_api_key=os.environ["COHERE_API_KEY"],
         top_n=k,
         model="rerank-v3.5",
     )
-    retriever = ContextualCompressionRetriever(
-        base_compressor=reranker,
-        base_retriever=ensemble,
-    )
-    # Store HyDE query so the endpoint can invoke with it for semantic search
-    retriever._hyde_query = hyde_question
-    return retriever
+    return reranker.compress_documents(fused, question)
 
 # --- Routes ---
 
@@ -277,19 +285,13 @@ def plays():
 @app.post("/answer", response_model=AnswerResponse)
 async def answer(request: AnswerRequest):
     play_filter = request.filters.get("play") if request.filters else None
-    try:
-        retriever = _build_retriever(request.question, request.k, play_filter)
-    except Exception as e:
-        import traceback
-        raise HTTPException(status_code=500, detail=f"build_retriever failed: {traceback.format_exc()}")
-
     t0 = time.monotonic()
 
     try:
-        hyde_q = getattr(retriever, "_hyde_query", request.question)
-        docs = retriever.invoke(hyde_q)
+        docs = _build_retriever(request.question, request.k, play_filter)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        raise HTTPException(status_code=500, detail=f"build_retriever failed: {traceback.format_exc()}")
 
     context = "\n\n---\n\n".join(
         f"[{d.metadata.get('play')} - {d.metadata.get('current_scene', '')}]\n{d.page_content}"
